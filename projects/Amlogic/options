@@ -1,0 +1,47 @@
+################################################################################
+# setup system defaults
+################################################################################
+
+  # Bootloader to use (syslinux / u-boot)
+    BOOTLOADER="u-boot"
+
+  # U-Boot firmware package(s) to use
+    UBOOT_FIRMWARE="amlogic-boot-fip"
+
+  # Kernel extra targets to build
+    KERNEL_MAKE_EXTRACMD=" $(xmlstarlet sel -t -m "//dtb/${DEVICE}//file" -o "amlogic/" -v "." -o ".dtb " "${PROJECT_DIR}/${PROJECT}/bootloader/dtb.xml")"
+
+  # Kernel extra options
+    EXTRA_CMDLINE="quiet console=ttyAML0,115200n8 console=tty0 systemd.debug_shell=ttyAML0 video=HDMI-A-1:1920x1080@60"
+
+################################################################################
+# setup build defaults
+################################################################################
+
+  # Project FLAGS
+    PROJECT_CFLAGS=""
+
+  # SquashFS compression method (gzip / lzo / xz)
+    SQUASHFS_COMPRESSION="lzo"
+
+################################################################################
+# setup project defaults
+################################################################################
+
+  # OpenGL(X) implementation to use (no / mesa)
+    OPENGL="mesa"
+
+  # OpenGL-ES implementation to use (no / mesa)
+    OPENGLES="mesa"
+
+  # Displayserver to use (no / wl)
+    DISPLAYSERVER="wl"
+
+  # Windowmanager to use (none / weston)
+    WINDOWMANAGER="weston"
+
+  # debug tty path
+    DEBUG_TTY="/dev/ttyAML0"
+
+  # ROCKNIX Subdevices
+    SUBDEVICES=$(xmlstarlet sel -t -m "//dtb/${DEVICE}/*[@bootmethod]" -v "name()" -n "${PROJECT_DIR}/${PROJECT}/bootloader/dtb.xml")

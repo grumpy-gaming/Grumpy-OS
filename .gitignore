@@ -1,0 +1,21 @@
+# Rocknix/Buildroot build artifacts
+/build.*
+/output/
+/dl/
+/host/
+/toolchain/
+/release/
+/sources/
+/tmp/
+
+# Editor swap files
+*~
+*.swp
+
+# Common OS specific files
+.DS_Store
+Thumbs.db
+.directory
+
+# WSL specific (if any issues)
+.wsl-history

@@ -1,0 +1,59 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0
+# Copyright (C) 2023 JELOS (https://github.com/JustEnoughLinuxOS)
+
+. config/options ''
+
+if [ -z "$1" ]
+then
+  export BURN_VERSION=$(date +%Y%m%d)
+else
+  BURN_VERSION=$1
+fi
+
+if [ -z "${DISTRO}" ] || [ -z "${DEVICE}" ] || [ -z "${ARCH}" ]
+then
+  echo "Environment variables DISTRO, DEVICE, and ARCH must be set.  Aborting."
+  exit 1
+fi
+
+# Exclude the boot device.
+MYBOOTDEVICE=$(readlink -f /dev/disk/by-partuuid/$(efibootmgr -v | awk 'BEGIN {FS=","} /Boot0000/ {print $3}'))
+
+SDDEVICES=($(awk '/sd*[a-z]$|mmcblk[0-9]$|nvme[0-9]n[0-9]$/ {print $4}' /proc/partitions | sort -r))
+
+for SDDEVICE in ${SDDEVICES[@]}
+do
+  # Make sure we're not using a device that's mounted.
+  ISMOUNTED=$(grep ${SDDEVICE} /proc/mounts >/dev/null 2>&1 && echo true || echo false)
+  if [[ ! "${MYBOOTDEVICE}" =~ ${SDDEVICE} ]] && \
+     [ "${ISMOUNTED}" = false ]
+  then
+    break
+  fi
+  unset SDDEVICE
+done
+
+if [ ! -z "${SDDEVICE}" ]
+then
+  echo -e "\nWARNING: The burnimage tool will flash ${DISTRO}-${DEVICE}.${ARCH}-${BURN_VERSION}.img to unused device /dev/${SDDEVICE}.\n"
+
+  read -n 1 -s -r -p "PRESS CONTROL-C NOW TO ABORT, OR ANY OTHER KEY TO CONTINUE!"
+  if [ -e "release/${DISTRO}-${DEVICE}.${ARCH}-${BURN_VERSION}.img" ] || [ -e "release/${DISTRO}-${DEVICE}.${ARCH}-${BURN_VERSION}.img.gz" ]
+  then
+    cd release
+    echo -e "\n\nExtracting ${DISTRO}-${DEVICE}.${ARCH}-${BURN_VERSION}.img"
+    gunzip ${DISTRO}-${DEVICE}.${ARCH}-${BURN_VERSION}.img.gz 2>/dev/null ||:
+    echo "Wiping ${SDDEVICE} partition data"
+    sudo wipefs -a ${SDDEVICE} 2>/dev/null ||:
+    echo "Writing ${DISTRO}-${DEVICE}.${ARCH}-${BURN_VERSION}.img to ${SDDEVICE}"
+    sudo dd if=${DISTRO}-${DEVICE}.${ARCH}-${BURN_VERSION}.img of=/dev/${SDDEVICE} bs=1M
+    sync
+  else
+    echo "Release not found (${DISTRO}-${DEVICE}.${ARCH}-${BURN_VERSION}.img), aborting."
+    exit 1
+  fi
+else
+  echo "SD Card could not be found, aborting."
+  exit 1
+fi

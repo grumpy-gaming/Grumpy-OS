@@ -1,0 +1,22 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0
+# Copyright (C) 2023 JELOS (https://github.com/JustEnoughLinuxOS)
+
+###
+### A simple loop to watch the status of any active builds.
+###
+
+DELAY=${1:-10}
+
+while true
+do
+  clear
+  ACTIVE=$(find build*/.threads -name status -mmin -5 -printf "%T@ %p\n" | sort -n | awk 'END {print $NF}')
+  if [ "${ACTIVE}" ]
+  then
+    cat ${ACTIVE}
+  else
+    echo -e "\nThere are no active builds available to view."
+  fi
+  sleep ${DELAY}
+done

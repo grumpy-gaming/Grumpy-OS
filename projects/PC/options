@@ -1,0 +1,49 @@
+################################################################################
+# setup system defaults
+################################################################################
+
+  # Bootloader to use (syslinux / u-boot)
+    BOOTLOADER="syslinux"
+
+  # Kernel target
+    KERNEL_TARGET="bzImage"
+
+  # Additional kernel make parameters (for example to specify the u-boot loadaddress)
+    KERNEL_MAKE_EXTRACMD=""
+
+  # Additional kernel dependencies
+    KERNEL_EXTRA_DEPENDS_TARGET=""
+
+  # Kernel to use. values can be:
+  # default:  default mainline kernel
+    LINUX="default"
+
+
+################################################################################
+# setup build defaults
+################################################################################
+
+  # Project CFLAGS
+    PROJECT_CFLAGS=""
+
+  # SquashFS compression method (gzip / lzo / xz / zstd)
+    SQUASHFS_COMPRESSION="zstd"
+
+
+################################################################################
+# setup project defaults
+################################################################################
+
+  # additional Firmware to use ( )
+  # Space separated list is supported,
+  # e.g. FIRMWARE=""
+    FIRMWARE=""
+
+  # additional drivers to install:
+  # for a list of additional drivers see packages/linux-drivers
+  # Space separated list is supported,
+  # e.g. ADDITIONAL_DRIVERS="DRIVER1 DRIVER2"
+    ADDITIONAL_DRIVERS=""
+
+  # Installation support
+    INSTALLER_SUPPORT="yes"

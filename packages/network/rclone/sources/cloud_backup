@@ -1,0 +1,318 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0
+# Copyright (C) 2024 ROCKNIX (https://github.com/ROCKNIX)
+
+# Script configuration and global variables
+SCRIPT_NAME=$(basename "$0")
+LOG_FILE="/var/log/cloud_sync.log"
+START_TIME=$(date +%s)
+
+# Logging function that supports different severity levels and optional console output
+# 
+# This function formats and records log messages with timestamps and severity levels.
+# It can optionally display messages on screen with appropriate color coding.
+#
+# Parameters:
+#   $1: Message text to log
+#   $2: Whether to echo to screen (true/false, defaults to true)
+#   $3: Log level (INFO, WARN, ERROR, defaults to configured LOG_LEVEL or INFO)
+log_message() {
+    local message="$1"
+    local echo_to_screen="${2:-true}"  # Default to true
+    local level="${3:-${LOG_LEVEL:-INFO}}"  # Use configured LOG_LEVEL as default
+    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    
+    echo "[${timestamp}] [${level}] [${SCRIPT_NAME}] ${message}" >> ${LOG_FILE}
+    
+    if [[ "${echo_to_screen}" == "true" ]]; then
+        # Color output based on level
+        case "${level}" in
+            ERROR) echo -e "\e[31m${message}\e[0m" ;;
+            WARN)  echo -e "\e[33m${message}\e[0m" ;;
+            *)     echo -e "${message}" ;;
+        esac
+    fi
+}
+
+# Performs cleanup operations and exits with the specified code
+# Records total execution time in the log for performance tracking
+# Parameters:
+#   $1: Exit code to return
+clean_exit() {
+    local exit_code=$1
+    local duration=$(($(date +%s) - START_TIME))
+    
+    log_message "Script completed in ${duration} seconds with exit code ${exit_code}" "false"
+    exit ${exit_code}
+}
+
+# Verifies rclone is properly configured before attempting operations
+# Exits with error if configuration file is missing
+check_rclone_config() {
+    if [ ! -e "/storage/.config/rclone/rclone.conf" ]; then
+        log_message "You must configure rclone before using this tool. Run \`rclone config\` to get started." "true" "ERROR"
+        sleep 3
+        clean_exit 1
+    fi
+}
+
+# Validates internet connectivity before attempting cloud operations
+# Uses ping to google.com as a connectivity test
+check_internet() {
+    log_message "Checking internet connectivity..." "false"
+    ONLINESTATUS=`ping -q -c1 google.com &>/dev/null && echo online || echo offline`
+    if [ "${ONLINESTATUS}" == "offline" ]; then
+        log_message "You're not currently connected to the internet.\nPlease verify your settings and then try again." "true" "ERROR"
+        sleep 3
+        clean_exit 1
+    fi
+    log_message "Internet connection detected" "false"
+}
+
+# Loads user configuration from cloud_sync.conf
+# Applies default values for any missing configuration parameters
+load_config() {
+    log_message "Loading configuration from cloud_sync.conf" "false"
+    source /storage/.config/cloud_sync.conf
+    
+    # Check if needed variables are present, add if necessary
+    if [ "${BACKUPPATH}" == "" ] || [ "${RESTOREPATH}" == "" ] || [ "${SYNCPATH}" == "" ] || [ "${RCLONEOPTS}" == "" ] || [ "${BACKUPMETHOD}" == "" ] || [ "${RESTOREMETHOD}" == "" ] || [ "${RSYNCRMDIR}" == "" ] || [ "${BACKUPFOLDER}" == "" ] || [ "${SYNCPATH_BACKUP}" == "" ] || [ "${BACKUPFILE_BACKUP_OPTION}" == "" ] || [ "${BACKUPFILE_RESTORE_OPTION}" == "" ] || [ "${LOG_LEVEL}" == "" ]; then
+        log_message "Some configuration variables missing, loading defaults" "false" "WARN"
+        source /storage/.config/cloud_sync.conf.defaults
+        if [ "${BACKUPPATH}" == "" ]; then
+            sed -i -e '$a\\nBACKUPPATH="'"${DEFAULT_BACKUPPATH}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${RESTOREPATH}" == "" ]; then
+            sed -i -e '$a\\nRESTOREPATH="'"${DEFAULT_RESTOREPATH}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${SYNCPATH}" == "" ]; then
+            sed -i -e '$a\\nSYNCPATH="'"${DEFAULT_SYNCPATH}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${RCLONEOPTS}" == "" ]; then
+            # Ensure the options string has proper spacing when adding to config
+            sed -i -e '$a\\nRCLONEOPTS="'"${DEFAULT_RCLONEOPTS}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${BACKUPMETHOD}" == "" ]; then
+            sed -i -e '$a\\nBACKUPMETHOD="'"${DEFAULT_BACKUPMETHOD}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${RESTOREMETHOD}" == "" ]; then
+            sed -i -e '$a\\nRESTOREMETHOD="'"${DEFAULT_RESTOREMETHOD}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${RSYNCRMDIR}" == "" ]; then
+            sed -i -e '$a\\nRSYNCRMDIR="'"${DEFAULT_RSYNCRMDIR}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${BACKUPFOLDER}" == "" ]; then
+            sed -i -e '$a\\nBACKUPFOLDER="'"${DEFAULT_BACKUPFOLDER}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${SYNCPATH_BACKUP}" == "" ]; then
+            sed -i -e '$a\\nSYNCPATH_BACKUP="'"${DEFAULT_SYNCPATH}/backup"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${BACKUPFILE_BACKUP_OPTION}" == "" ]; then
+            sed -i -e '$a\\nBACKUPFILE_BACKUP_OPTION="'"${DEFAULT_BACKUPFILE_BACKUP_OPTION}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${BACKUPFILE_RESTORE_OPTION}" == "" ]; then
+            sed -i -e '$a\\nBACKUPFILE_RESTORE_OPTION="'"${DEFAULT_BACKUPFILE_RESTORE_OPTION}"'"' /storage/.config/cloud_sync.conf
+        fi
+        if [ "${LOG_LEVEL}" == "" ]; then
+            sed -i -e '$a\\nLOG_LEVEL="'"${DEFAULT_LOG_LEVEL}"'"' /storage/.config/cloud_sync.conf
+        fi
+        source /storage/.config/cloud_sync.conf
+    fi
+    
+    # Update cloud sync rules by calling the helper script
+    if [ -f "/usr/bin/cloud_sync_helper" ]; then
+        log_message "Updating cloud sync rules" "false"
+        /usr/bin/cloud_sync_helper ${LOG_FILE}
+    fi
+    
+    # Clean and normalize rclone options to ensure proper spacing
+    # Convert multi-line options to a properly spaced single line
+    # First, save original options for debugging
+    log_message "Original RCLONEOPTS: ${RCLONEOPTS}" "false"
+    
+    # Replace any line continuations and normalize spaces
+    RCLONEOPTS=$(echo "${RCLONEOPTS}" | tr '\n\\' '  ' | tr -s ' ')
+    log_message "After newline cleanup: ${RCLONEOPTS}" "false"
+    
+    # Ensure each option starts with a space (except the first one)
+    RCLONEOPTS=$(echo "${RCLONEOPTS}" | sed 's/--/ --/g' | sed 's/^ //')
+    log_message "After spacing fix: ${RCLONEOPTS}" "false"
+    
+    # Convert to array to ensure proper word splitting
+    RCLONE_OPTS_ARRAY=()
+    for opt in ${RCLONEOPTS}; do
+        RCLONE_OPTS_ARRAY+=("$opt")
+    done
+    log_message "Options array has ${#RCLONE_OPTS_ARRAY[@]} elements" "false"
+    
+    # Create a version without the --delete-excluded flag
+    RESTORE_RCLONEOPTS=$(echo "${RCLONEOPTS}" | sed 's/--delete-excluded//')
+    
+    log_message "Configuration loaded successfully" "false"
+}
+
+# PART 1: Game saves backup function
+# Backs up game saves to cloud storage
+backup_game_saves() {
+    log_message "====================================" "true"
+    log_message "STARTING GAME SAVES BACKUP" "true"
+    log_message "====================================" "true"
+    
+    log_message "Starting backup from ${BACKUPPATH} to ${REMOTENAME}${SYNCPATH}"
+    log_message "Backup started at $(date)" "false"
+    
+    # Set log level to DEBUG when INFO is selected for more verbose logging
+    local rclone_debug=""
+    local filtered_opts=("${RCLONE_OPTS_ARRAY[@]}")
+    if [ "${LOG_LEVEL}" == "INFO" ]; then
+        rclone_debug="--log-level DEBUG"
+        # Remove --verbose from options to avoid conflict with --log-level
+        filtered_opts=()
+        for opt in "${RCLONE_OPTS_ARRAY[@]}"; do
+            if [ "$opt" != "--verbose" ] && [ "$opt" != "-v" ]; then
+                filtered_opts+=("$opt")
+            fi
+        done
+    fi
+    
+    # Log the full rclone command for debugging
+    log_message "Executing rclone command with filtered options to prevent conflicts" "false"
+    
+    # Execute rclone directly without capturing output to allow progress display
+    if [ ${#filtered_opts[@]} -gt 0 ]; then
+        rclone ${BACKUPMETHOD} \
+          "${filtered_opts[@]}" \
+          ${rclone_debug} \
+          --exclude="${BACKUPFOLDER}/**" \
+          --exclude="backups/**" \
+          --exclude="bios/**" \
+          --exclude="*.zip" \
+          ${BACKUPPATH}/ ${REMOTENAME}${SYNCPATH}/
+    else
+        # Fallback if array is empty
+        rclone ${BACKUPMETHOD} \
+          --progress \
+          --log-file /var/log/cloud_sync.log \
+          --filter-from /storage/.config/cloud_sync-rules.txt \
+          --delete-excluded \
+          ${rclone_debug} \
+          --exclude="${BACKUPFOLDER}/**" \
+          --exclude="backups/**" \
+          --exclude="bios/**" \
+          --exclude="*.zip" \
+          ${BACKUPPATH}/ ${REMOTENAME}${SYNCPATH}/
+    fi
+    
+    BACKUP_STATUS=$?
+    
+    # Always log errors
+    if [ $BACKUP_STATUS -ne 0 ]; then
+        log_message "Backup encountered errors (status $BACKUP_STATUS)" "false" "ERROR"
+    fi
+    
+    if [ $BACKUP_STATUS -eq 0 ]; then
+        log_message "Game saves backup completed successfully" "true"
+    else
+        log_message "Game saves backup completed with errors (status $BACKUP_STATUS)" "true" "WARN"
+    fi
+    
+    return $BACKUP_STATUS
+}
+
+# PART 2: System backup file transfer function
+# Transfers existing system backup files to cloud storage
+# Only runs when BACKUPFILE_BACKUP_OPTION is set to "yes"
+backup_system_files() {
+    echo
+    log_message "====================================" "true"
+    log_message "STARTING SYSTEM BACKUP FILE TRANSFER" "true"
+    log_message "====================================" "true"
+    
+    if [ "${BACKUPFILE_BACKUP_OPTION}" == "yes" ]; then
+        # Skip if backup directory is empty to avoid unnecessary transfers
+        if [ -z "$(ls -A ${BACKUPFOLDER} 2>/dev/null)" ]; then
+            log_message "There are no system backup files to transfer" "true" "WARN"
+            return 1
+        fi
+        
+        log_message "Starting transfer of system backup files from ${BACKUPFOLDER} to ${REMOTENAME}${SYNCPATH_BACKUP}"
+        log_message "System backup file transfer started at $(date)" "false"
+        
+        # Ensure target directory exists before attempting transfer
+        rclone mkdir ${REMOTENAME}${SYNCPATH_BACKUP}/
+        
+        # Use more specific include pattern to target only backup zip files
+        rclone ${BACKUPMETHOD} \
+          ${RESTORE_RCLONEOPTS} \
+          --include="*.zip" \
+          --stats-one-line \
+          ${BACKUPFOLDER}/ ${REMOTENAME}${SYNCPATH_BACKUP}/
+        
+        BACKUP_SYSTEM_STATUS=$?
+        
+        if [ $BACKUP_SYSTEM_STATUS -eq 0 ]; then
+            log_message "System backup file transfer completed successfully" "true"
+        else
+            log_message "System backup file transfer completed with errors (status $BACKUP_SYSTEM_STATUS)" "true" "WARN"
+        fi
+        
+    else
+        log_message "System backup file transfer skipped (BACKUPFILE_BACKUP_OPTION is not set to 'yes')" "true"
+        BACKUP_SYSTEM_STATUS=0
+    fi
+    
+    return $BACKUP_SYSTEM_STATUS
+}
+
+# Main script execution
+main() {
+    check_rclone_config
+    check_internet
+    load_config
+    
+    # Use the first configured remote in rclone
+    # Note: This assumes at least one remote is configured and the first one should be used
+    REMOTENAME=`rclone listremotes | head -1`
+    
+    # Begin main script operations with user-friendly header
+    log_message "=> ${OS_NAME} CLOUD BACKUP UTILITY\n"
+    
+    # Execute Part 1: Game saves backup
+    # This performs the primary save file backup operation using the configured method
+    backup_game_saves
+    BACKUP_STATUS=$?
+    
+    # Add a pause for better visual separation between operations
+    sleep 2
+    
+    # Execute Part 2: System backup file transfer
+    # This backs up system backup files (zip files) if enabled in configuration
+    backup_system_files
+    BACKUP_SYSTEM_STATUS=$?
+    
+    # Add a pause before summary
+    sleep 2
+    
+    # Add a line break for better visual separation
+    echo
+    
+    # Provide final summary of all operations
+    log_message "====================================" "true"
+    log_message "BACKUP SUMMARY:" "true"
+    log_message "Game saves backup: $([ $BACKUP_STATUS -eq 0 ] && echo 'SUCCESS' || echo 'COMPLETED WITH ERRORS')" "true"
+    [ "${BACKUPFILE_BACKUP_OPTION}" == "yes" ] && log_message "System backup file transfer: $([ $BACKUP_SYSTEM_STATUS -eq 0 ] && echo 'SUCCESS' || echo 'COMPLETED WITH ERRORS')" "true"
+    log_message "Log file: ${LOG_FILE}" "true"
+    log_message "====================================" "true"
+    
+    # Add a final pause before exiting
+    sleep 3
+    
+    # Use the game saves backup status as the overall exit code
+    clean_exit ${BACKUP_STATUS}
+}
+
+# Set up signal trap to handle user interruption gracefully
+trap 'log_message "Script interrupted by user" "false" "WARN"; clean_exit 130' INT TERM
+
+# Start script execution
+main

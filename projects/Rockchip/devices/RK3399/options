@@ -1,0 +1,65 @@
+################################################################################
+# setup device defaults
+################################################################################
+
+  # The TARGET_CPU variable controls which processor should be targeted for
+  # generated code.
+    case ${TARGET_ARCH} in
+      aarch64)
+        TARGET_KERNEL_ARCH="arm64"
+        TARGET_PATCH_ARCH="aarch64"
+        TARGET_CPU="cortex-a72.cortex-a53"
+        TARGET_ARCH_FLAGS="+crc+crypto"
+        TARGET_FEATURES="64bit"
+        ;;
+      arm)
+        TARGET_KERNEL_ARCH="arm64"
+        TARGET_PATCH_ARCH="aarch64"
+        TARGET_CPU="cortex-a72.cortex-a53"
+        TARGET_ARCH_FLAGS="+crc"
+        TARGET_FPU="crypto-neon-fp-armv8"
+        TARGET_FLOAT="hard"
+        TARGET_FEATURES="32bit"
+        ;;
+    esac
+
+  # Kernel target
+    DEVICE_NAME="RK3399"
+    KERNEL_TARGET="Image"
+    BOOTLOADER="u-boot"
+    PARTITION_TABLE="gpt"
+    UBOOT_FIRMWARE+=" atf"
+    ATF_PLATFORM="rk3399"
+
+  # Define the CPU
+    HW_CPU="Rockchip RK3399"
+
+  # Mali GPU family
+    MALI_FAMILY="t860"
+    GRAPHIC_DRIVERS="panfrost"
+
+  # OpenGL(X) implementation to use (mesa / no)
+    OPENGL="mesa"
+
+  # OpenGL-ES implementation to use (mesa / no)
+    OPENGLES="mesa"
+
+  # Several libretro cores doesn't work with GL, so prefer GLES for this reason
+    PREFER_GLES="yes"
+
+  # Displayserver to use (wl / no)
+    DISPLAYSERVER="wl"
+
+  # Windowmanager to use (weston / swaywm-env / no)
+    WINDOWMANAGER="swaywm-env"
+
+  # Pipewire audio support (yes / no)
+    PIPEWIRE_SUPPORT="yes"
+
+  # build and install rocknix joypad driver (yes / no)
+    ROCKNIX_JOYPAD="yes"
+
+  # additional Firmware to use ( )
+  # Space separated list is supported,
+  # e.g. FIRMWARE=""
+    FIRMWARE="RTL8188FU-firmware"

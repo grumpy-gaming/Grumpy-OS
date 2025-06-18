@@ -1,0 +1,235 @@
+#!/bin/bash
+
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2009-2016 Stephan Raue (stephan@openelec.tv)
+# Copyright (C) 2016-present Team LibreELEC (https://libreelec.tv)
+# Copyright (C) 2023 JELOS (https://github.com/JustEnoughLinuxOS)
+# Copyright (C) 2022-present UnofficialOS
+
+################################################################################
+# variables such as ${ROOT} ${PATH} etc... that are required for this
+# script to work must be passed via env ... in scripts/image
+################################################################################
+
+# set variables
+LE_TMP=$(mktemp -d -p ${TARGET_IMG})
+SAVE_ERROR="${LE_TMP}/save_error"
+. projects/${PROJECT}/devices/${DEVICE}/options
+
+if [ -z "${SYSTEM_SIZE}" -o -z "${SYSTEM_PART_START}" ]; then
+  echo "mkimage: SYSTEM_SIZE and SYSTEM_PART_START must be configured!"
+  exit 1
+fi
+
+if [ "${PARTITION_TABLE}" = "gpt" ]; then
+  DISK_GPT_PADDING=1
+else
+  DISK_GPT_PADDING=0
+fi
+
+DISK_START_PADDING=$(( (${SYSTEM_PART_START} + 2048 - 1) / 2048 ))
+DISK_SIZE=$(( ${DISK_START_PADDING} + ${SYSTEM_SIZE} + ${STORAGE_SIZE} + ${DISK_GPT_PADDING} ))
+DISK_BASENAME="${TARGET_IMG}/${IMAGE_NAME}"
+if [ -n "${SUBDEVICE}" ]; then
+  DISK_BASENAME="${DISK_BASENAME}-${SUBDEVICE}"
+fi
+DISK="${DISK_BASENAME}.img"
+
+# functions
+cleanup() {
+  echo -e "image: cleanup...\n"
+  rm -rf "${LE_TMP}"
+}
+
+show_error() {
+  echo "image: An error has occurred..."
+  echo
+  if [ -s "${SAVE_ERROR}" ]; then
+    cat "${SAVE_ERROR}"
+  else
+    echo "Folder ${LE_TMP} might be out of free space..."
+  fi
+  echo
+  cleanup
+  exit 1
+}
+
+trap cleanup SIGINT
+
+# create an image
+echo -e "\nimage: creating sparse file for disk image ${DISK##*/}..."
+dd if=/dev/zero of="${DISK}" bs=1M count=0 seek="${DISK_SIZE}" conv=fsync >"${SAVE_ERROR}" 2>&1 || show_error
+
+# write a disklabel
+echo "image: creating ${PARTITION_TABLE} partition table..."
+parted -s "${DISK}" mklabel ${PARTITION_TABLE}
+sync
+
+# create partitions
+echo "image: creating partitions..."
+
+SYSTEM_PART_END=$(( ${SYSTEM_PART_START} + (${SYSTEM_SIZE} * 1024 * 1024 / 512) - 1 ))
+STORAGE_PART_START=$(( ${SYSTEM_PART_END} + 1 ))
+STORAGE_PART_END=$(( ${STORAGE_PART_START} + (${STORAGE_SIZE} * 1024 * 1024 / 512) - 1 ))
+
+if [ "${PARTITION_TABLE}" = "gpt" ]; then
+  echo "image: Create GPT boot partition."
+  parted -s "${DISK}" -a min unit s mkpart system  fat32 ${SYSTEM_PART_START}  ${SYSTEM_PART_END}
+  parted -s "${DISK}" -a min unit s mkpart storage ext4  ${STORAGE_PART_START} ${STORAGE_PART_END}
+  parted -s "${DISK}" set 1 legacy_boot on
+else
+  echo "image: Create MBR boot partition."
+  parted -s "${DISK}" -a min unit s mkpart primary fat32 ${SYSTEM_PART_START}  ${SYSTEM_PART_END}
+  parted -s "${DISK}" -a min unit s mkpart primary ext4  ${STORAGE_PART_START} ${STORAGE_PART_END}
+  parted -s "${DISK}" set 1 boot on
+fi
+
+echo "image: creating sparse file for part2..."
+STORAGE_PART_COUNT=$(( ${STORAGE_PART_END} - ${STORAGE_PART_START} + 1 ))
+sync
+dd if="${DISK}" of="${LE_TMP}/part2.ext4" bs=512 count=0 seek="${STORAGE_PART_COUNT}" conv=fsync >"${SAVE_ERROR}" 2>&1 || show_error
+
+# create filesystem on part2
+echo "image: creating filesystem on part2..."
+mke2fs -F -q -t ext4 -T ext4 -O ^orphan_file -m 0 "${LE_TMP}/part2.ext4"
+tune2fs -L "${DISTRO_DISKLABEL}" -U ${UUID_STORAGE} "${LE_TMP}/part2.ext4" >"${SAVE_ERROR}" 2>&1 || show_error
+e2fsck -n "${LE_TMP}/part2.ext4" >"${SAVE_ERROR}" 2>&1 || show_error
+sync
+
+# add resize mark
+mkdir "${LE_TMP}/part2.fs"
+touch "${LE_TMP}/part2.fs/.please_resize_me"
+echo "image: populating filesystem on part2..."
+populatefs -U -d "${LE_TMP}/part2.fs" "${LE_TMP}/part2.ext4" >"${SAVE_ERROR}" 2>&1 || show_error
+sync
+e2fsck -n "${LE_TMP}/part2.ext4" >"${SAVE_ERROR}" 2>&1 || show_error
+
+# merge part2 into disk image
+echo "image: merging part2 into disk image..."
+dd if="${LE_TMP}/part2.ext4" of="${DISK}" bs=512 seek="${STORAGE_PART_START}" conv=fsync,notrunc >"${SAVE_ERROR}" 2>&1 || show_error
+
+# create part1 to format and copy files
+echo "image: creating sparse file for part1..."
+SYSTEM_PART_COUNT=$(( ${SYSTEM_PART_END} - ${SYSTEM_PART_START} + 1 ))
+sync
+dd if=/dev/zero of="${LE_TMP}/part1.fat" bs=512 count=0 seek="${SYSTEM_PART_COUNT}" conv=fsync >"${SAVE_ERROR}" 2>&1 || show_error
+
+shopt -s expand_aliases  # enables alias expansion in script
+alias mcopy='mcopy -i "${LE_TMP}/part1.fat" -o'
+alias mmd='mmd -i "${LE_TMP}/part1.fat"'
+
+# create filesystem on part1
+echo "image: creating filesystem on part1..."
+
+if [ "${BOOTLOADER}" = "syslinux" -o "${BOOTLOADER}" = "arm-efi" -o "${BOOTLOADER}" = "u-boot" ]; then
+  mformat -i "${LE_TMP}/part1.fat" -v "${DISTRO_BOOTLABEL}" -N "${UUID_SYSTEM//-/}" :: >"${SAVE_ERROR}" 2>&1 || show_error
+fi
+sync
+
+if [ "${BOOTLOADER}" = "syslinux" ]; then
+  # create bootloader configuration
+  echo "image: creating bootloader configuration... (syslinux)"
+  cat << EOF > "${LE_TMP}/syslinux.cfg"
+DEFAULT run
+TIMEOUT 0
+PROMPT 0
+NOESCAPE 1
+
+LABEL run
+  KERNEL /${KERNEL_NAME}
+  APPEND boot=LABEL=${DISTRO_BOOTLABEL} disk=LABEL=${DISTRO_DISKLABEL} portable ${EXTRA_CMDLINE}
+EOF
+
+  cat << EOF > "${LE_TMP}/grub.cfg"
+set timeout="0"
+set default="Run"
+menuentry "Run" {
+	search --set -f /KERNEL
+	linux /KERNEL boot=LABEL=${DISTRO_BOOTLABEL} disk=LABEL=${DISTRO_DISKLABEL} grub_portable ${EXTRA_CMDLINE}
+}
+EOF
+
+  mcopy "${LE_TMP}/syslinux.cfg" ::
+
+  # install syslinux
+  echo "image: installing syslinux to part1..."
+  syslinux.mtools -i "${LE_TMP}/part1.fat" >"${SAVE_ERROR}" 2>&1 || show_error
+
+  # copy files
+  echo "image: copying files to part1..."
+  mcopy "${TARGET_IMG}/${BUILD_NAME}.kernel" "::/${KERNEL_NAME}"
+  mcopy "${TARGET_IMG}/${BUILD_NAME}.system" ::/SYSTEM
+  mcopy "${RELEASE_DIR}/target/KERNEL.md5" "::/${KERNEL_NAME}.md5"
+  mcopy "${RELEASE_DIR}/target/SYSTEM.md5" ::/SYSTEM.md5
+
+  mmd EFI EFI/BOOT
+  mcopy "${TOOLCHAIN}/share/syslinux/bootx64.efi" ::/EFI/BOOT
+  mcopy "${TOOLCHAIN}/share/syslinux/ldlinux.e64" ::/EFI/BOOT
+  mcopy "${TOOLCHAIN}/share/grub/bootia32.efi" ::/EFI/BOOT
+  mcopy "${LE_TMP}/grub.cfg" ::/EFI/BOOT
+
+elif [ "${BOOTLOADER}" = "arm-efi" ]; then
+  # create bootloader configuration
+  echo "image: creating bootloader configuration... (arm-efi)"
+  if [ -f "${PROJECT_DIR}/${PROJECT}/devices/${DEVICE}/bootloader/mkimage" ]; then
+    . "${PROJECT_DIR}/${PROJECT}/devices/${DEVICE}/bootloader/mkimage"
+  elif [ -f "${PROJECT_DIR}/${PROJECT}/bootloader/mkimage" ]; then
+    . "${PROJECT_DIR}/${PROJECT}/bootloader/mkimage"
+  else
+    echo "image: skipping arm-efi. no mkimage script found"
+  fi
+
+  # copy files
+  echo "image: copying files to part1..."
+  mcopy "${TARGET_IMG}/${BUILD_NAME}.kernel" "::/${KERNEL_NAME}"
+  mcopy "${TARGET_IMG}/${BUILD_NAME}.system" ::/SYSTEM
+  mcopy "${RELEASE_DIR}/target/KERNEL.md5" "::/${KERNEL_NAME}.md5"
+  mcopy "${RELEASE_DIR}/target/SYSTEM.md5" ::/SYSTEM.md5
+
+elif [ "${BOOTLOADER}" = "u-boot" ]; then
+  # create bootloader configuration
+  echo "image: creating bootloader configuration... (u-boot)"
+  if [ -f "${PROJECT_DIR}/${PROJECT}/devices/${DEVICE}/bootloader/mkimage" ]; then
+    . "${PROJECT_DIR}/${PROJECT}/devices/${DEVICE}/bootloader/mkimage"
+  elif [ -f "${PROJECT_DIR}/${PROJECT}/bootloader/mkimage" ]; then
+    . "${PROJECT_DIR}/${PROJECT}/bootloader/mkimage"
+  else
+    echo "image: skipping u-boot. no mkimage script found"
+  fi
+
+  echo "image: copying files to part1..."
+  mcopy "${TARGET_IMG}/${BUILD_NAME}.kernel" "::/${KERNEL_NAME}"
+  mcopy "${TARGET_IMG}/${BUILD_NAME}.system" ::/SYSTEM
+  mcopy "${RELEASE_DIR}/target/KERNEL.md5" "::/${KERNEL_NAME}.md5"
+  mcopy "${RELEASE_DIR}/target/SYSTEM.md5" ::/SYSTEM.md5
+fi # bootloader
+
+# run fsck
+echo "image: checking filesystem on part1..."
+sync
+fsck.fat -n "${LE_TMP}/part1.fat" >"${SAVE_ERROR}" 2>&1 || show_error
+
+# merge part1 into disk image
+echo "image: merging part1 into disk image..."
+dd if="${LE_TMP}/part1.fat" of="${DISK}" bs=512 seek="${SYSTEM_PART_START}" conv=fsync,notrunc >"${SAVE_ERROR}" 2>&1 || show_error
+
+# gzip
+echo "image: compressing..."
+pigz --best --force "${DISK}"
+
+# create sha256 checksum of image
+(
+  cd "${TARGET_IMG}"
+  sha256sum "${DISK##*/}.gz" > "${DISK##*/}.gz.sha256"
+)
+
+if [ -n "${LOCAL_SSH_KEYS_FILE}" ] || \
+   [ -n "${LOCAL_WIFI_SSID}" ] || \
+   [ -n "${LOCAL_WIFI_KEY}" ]
+then
+  echo "image: CONTAINS SENSITIVE DATA, DO NOT DISTRIBUTE."
+fi
+
+# cleanup
+cleanup
+exit

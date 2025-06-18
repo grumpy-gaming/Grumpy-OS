@@ -1,0 +1,112 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2023 JELOS (https://github.com/JustEnoughLinuxOS)
+
+###
+### Simple script to build ROCKNX
+###
+
+scripts/checkdeps
+
+if [ !"${ARCH}" == true ]
+then
+  echo "export ARCH before building."
+  exit 1
+fi
+
+. config/options ""
+. projects/${PROJECT}/devices/${DEVICE}/options
+
+echo "Building ${DISTRO} for ${DEVICE}"
+
+if [ "${ENABLE_32BIT}" == "true" ]
+then
+  PKG_CLEAN+=" ${CLEAN_EMU_32BIT}"
+fi
+
+if [ "${WINDOWMANAGER}" == "weston" ]
+then
+  PKG_CLEAN+=" ${CLEAN_WESTON}"
+fi
+
+# If DEVICE_ROOT is defined and not the device being built, make sure that the
+# build folder is a link to root rather than a folder.
+
+if [ -n "${DEVICE_ROOT}" ]
+then
+  if [ ! "${DEVICE_ROOT}" = "${DEVICE}" ]
+  then
+    # Ensure there isn't a left over build directory.
+    if [ -d "build.${DISTRO}-${DEVICE}.${ARCH}" ]
+    then
+      echo "Removing stale build root."
+      rm -rf build.${DISTRO}-${DEVICE}.${ARCH}
+    fi
+
+    # Ensure the DEVICE_ROOT is built before DEVICE
+    if [ ! -d "build.${DISTRO}-${DEVICE_ROOT}.${ARCH}" ]
+    then
+        echo "ERROR: Can't find build root build.${DISTRO}-${DEVICE_ROOT}.${ARCH}"
+        echo "You need to build ${DEVICE_ROOT} before ${DEVICE}"
+        exit 1
+    fi
+
+    # Link back to the DEVICE_ROOT so we can re-use the build directory to save space.
+    if [ ! -L "build.${DISTRO}-${DEVICE}.${ARCH}" ]
+    then
+      ln -sf build.${DISTRO}-${DEVICE_ROOT}.${ARCH} build.${DISTRO}-${DEVICE}.${ARCH}
+    fi
+
+    # If sources are split between devices, make sure we link it.
+    if [ -d "sources-${DEVICE_ROOT}" ] && \
+       [ ! -L "sources-${DEVICE}" ]
+    then
+      ln -sf sources-${DEVICE_ROOT} sources-${DEVICE}
+    fi
+  fi
+  PKG_CLEAN+=" ${CLEAN_DEVICE_ROOT}"
+fi
+
+# Clean necessary packages.
+PKG_CLEAN+=" ${CLEAN_NETWORK} ${CLEAN_OS_BASE} ${CLEAN_PACKAGES}"
+
+if [ ! -n "${DIRTY}" ]
+then
+  # Clean a few packages to ensure the build date and version are updated
+  for package in ${PKG_CLEAN}
+  do
+    echo "Clean: ${package}"
+    ./scripts/clean ${package} 2>/dev/null ||:
+  done
+  rm -rf build.${DISTRO}-${DEVICE_ROOT}.${ARCH}/{.stamps/initramfs,initramfs}
+fi
+
+# Clean out old builds before starting the new one.
+echo "Prune old releases: ${DISTRO}-${DEVICE}.${ARCH}-*"
+rm -f ./release/${DISTRO}-${DEVICE}.${ARCH}-*
+
+# Remove the image root as it should be regenerated for every build.
+rm -rf ./build.${DISTRO}-${DEVICE}.${ARCH}/image
+
+case ${ARCH} in
+  arm)
+    [ "${BASE_ONLY}" == "true" ] || [ ! "${ENABLE_32BIT}" == "true" ] && exit 0
+    export PKG_BUILD_PERF=no
+    scripts/build_compat arm
+    scripts/install arm
+  ;;
+  i686)
+    [ "${BASE_ONLY}" == "true" ] || [ ! "${ENABLE_32BIT}" == "true" ] && exit 0
+    export PKG_BUILD_PERF=no
+    scripts/build_compat x86
+    scripts/install x86
+  ;;
+  *)
+    make image
+esac
+
+if [ ! $? == 0 ]
+then
+  echo "Build failed..exiting."
+  exit 1
+fi
