@@ -13,7 +13,7 @@ Grumpy-OS is built upon the excellent work of the **ROCKNIX** project.
 It utilizes their foundational codebase and hardware support for Allwinner H700 devices.
 We extend our gratitude to the ROCKNIX team and its contributors for providing such a robust base.
 
-**Link to ROCKNIX GitHub Repository https://github.com/ROCKNIX/distribution
+** Link to ROCKNIX GitHub Repository https://github.com/ROCKNIX/distribution
 
 ## License:
 Grumpy-OS incorporates code distributed under the [Original License of ROCKNIX/JELOS - e.g., GNU General Public License v3.0](link-to-gpl-if-you-can-find-it-or-just-state-GPL). See the `licenses/` directory for full details.
